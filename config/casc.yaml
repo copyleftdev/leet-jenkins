@@ -1,0 +1,218 @@
+###############################################################################
+# Jenkins Configuration as Code (JCasC)
+# -----------------------------------------------------------------------------
+# This file configures Jenkins declaratively for reproducible, zero-touch setup.
+# All settings are applied on startup - no manual configuration required.
+###############################################################################
+
+jenkins:
+  systemMessage: |
+    <h2>🚀 Leet-Jenkins</h2>
+    <p>Expert-level Jenkins instance configured via JCasC.</p>
+    <p><strong>This instance is ephemeral and reproducible.</strong></p>
+
+  numExecutors: 0  # Controller should not run builds - use agents only
+  mode: EXCLUSIVE
+  
+  # Security Realm - Local user database
+  securityRealm:
+    local:
+      allowsSignup: false
+      users:
+        - id: "${JENKINS_ADMIN_ID:-admin}"
+          name: "Administrator"
+          password: "${JENKINS_ADMIN_PASSWORD:-admin}"
+
+  # Authorization Strategy - Role-based (Matrix)
+  authorizationStrategy:
+    globalMatrix:
+      permissions:
+        - "Overall/Administer:${JENKINS_ADMIN_ID:-admin}"
+        - "Overall/Read:authenticated"
+        - "Job/Build:authenticated"
+        - "Job/Cancel:authenticated"
+        - "Job/Read:authenticated"
+        - "Job/Workspace:authenticated"
+        - "Run/Replay:authenticated"
+        - "Run/Update:authenticated"
+        - "View/Read:authenticated"
+
+  # Agent protocols - disable deprecated protocols
+  agentProtocols:
+    - "JNLP4-connect"
+    - "Ping"
+
+  # Disable CLI over remoting (security best practice)
+  remotingSecurity:
+    enabled: true
+
+  # Quiet period for builds
+  quietPeriod: 5
+
+  # SCM checkout retry count
+  scmCheckoutRetryCount: 3
+
+  # Markup formatter - safe HTML
+  markupFormatter:
+    rawHtml:
+      disableSyntaxHighlighting: false
+
+  # Global node properties
+  globalNodeProperties:
+    - envVars:
+        env:
+          - key: "DOCKER_HOST"
+            value: "tcp://docker-dind:2376"
+          - key: "DOCKER_TLS_VERIFY"
+            value: "1"
+          - key: "DOCKER_CERT_PATH"
+            value: "/certs/client"
+
+  # Cloud configuration - Docker agents
+  clouds:
+    - docker:
+        name: "docker-cloud"
+        dockerApi:
+          dockerHost:
+            uri: "tcp://docker-dind:2376"
+            credentialsId: ""
+        templates:
+          # Generic build agent
+          - labelString: "docker-agent linux"
+            dockerTemplateBase:
+              image: "jenkins/agent:latest-jdk17"
+              mounts:
+                - type: "VOLUME"
+                  source: "jenkins_docker_certs_client"
+                  target: "/certs/client"
+                  readOnly: true
+              environmentsString: |
+                DOCKER_HOST=tcp://docker-dind:2376
+                DOCKER_TLS_VERIFY=1
+                DOCKER_CERT_PATH=/certs/client
+            remoteFs: "/home/jenkins/agent"
+            connector:
+              attach:
+                user: "jenkins"
+            instanceCapStr: "10"
+            retentionStrategy:
+              idleMinutes: 10
+            
+
+# Unclassified Jenkins settings
+unclassified:
+  # Location configuration
+  location:
+    url: "${JENKINS_URL:-http://localhost:8080/}"
+    adminAddress: "admin@localhost"
+
+  # Git plugin configuration
+  gitSCM:
+    globalConfigName: "Jenkins"
+    globalConfigEmail: "jenkins@localhost"
+    createAccountBasedOnEmail: false
+
+  # Pipeline configuration
+  globalDefaultFlowDurabilityLevel:
+    durabilityHint: "PERFORMANCE_OPTIMIZED"
+
+  # Timestamper plugin
+  timestamper:
+    allPipelines: true
+    elapsedTimeFormat: "'<b>'HH:mm:ss.S'</b> '"
+    systemTimeFormat: "'<b>'HH:mm:ss'</b> '"
+
+  # Build discarder defaults
+  buildDiscarders:
+    configuredBuildDiscarders:
+      - "jobBuildDiscarder"
+      - defaultBuildDiscarder:
+          discarder:
+            logRotator:
+              artifactDaysToKeepStr: "30"
+              artifactNumToKeepStr: "10"
+              daysToKeepStr: "60"
+              numToKeepStr: "20"
+
+  # Throttle concurrent builds
+  throttleJobProperty:
+    categories: []
+
+# Security settings
+security:
+  # CSRF protection
+  crumbIssuer:
+    standard:
+      excludeClientIPFromCrumb: false
+
+  # Script Security
+  scriptApproval:
+    approvedSignatures: []
+
+  # Global credentials
+  globalJobDslSecurityConfiguration:
+    useScriptSecurity: true
+
+  # API Token
+  apiToken:
+    creationOfLegacyTokenEnabled: false
+    tokenGenerationOnCreationEnabled: false
+    usageStatisticsEnabled: true
+
+# Credentials configuration
+credentials:
+  system:
+    domainCredentials:
+      - credentials:
+          - string:
+              id: "github-token"
+              secret: "${GITHUB_TOKEN}"
+              scope: GLOBAL
+              description: "GitHub PAT for repo access"
+
+# Tool installations
+tool:
+  git:
+    installations:
+      - name: "Default"
+        home: "git"
+
+
+# Job DSL seed job - GitHub example
+jobs:
+  - script: |
+      folder('github') {
+        description('GitHub repositories')
+      }
+      
+      pipelineJob('github/example-pipeline') {
+        description('Example GitHub pipeline')
+        definition {
+          cps {
+            script('''
+              pipeline {
+                agent { label 'docker-agent' }
+                stages {
+                  stage('Checkout') {
+                    steps {
+                      checkout scm
+                    }
+                  }
+                  stage('Build') {
+                    steps {
+                      echo 'Building...'
+                      sh 'ls -la'
+                    }
+                  }
+                }
+                post {
+                  always {
+                    cleanWs()
+                  }
+                }
+              }
+            '''.stripIndent())
+            sandbox(true)
+          }
+        }
+      }

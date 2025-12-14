@@ -1,0 +1,44 @@
+# =============================================================================
+# Jenkins Plugins - GitHub-focused CI/CD
+# =============================================================================
+
+# Core (required)
+configuration-as-code
+job-dsl
+
+# Pipeline
+workflow-aggregator
+pipeline-stage-view
+pipeline-graph-view
+pipeline-utility-steps
+
+# GitHub
+git
+github
+github-branch-source
+
+# Docker agents
+docker-plugin
+docker-workflow
+
+# Credentials
+credentials
+credentials-binding
+plain-credentials
+ssh-credentials
+
+# Security
+matrix-auth
+
+# UI
+dark-theme
+ansicolor
+timestamper
+
+# Utilities
+ws-cleanup
+build-timeout
+generic-webhook-trigger
+
+# Testing
+junit

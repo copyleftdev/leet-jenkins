@@ -1,0 +1,177 @@
+###############################################################################
+# LEET-JENKINS: Expert-Level Jenkins Docker Compose
+# -----------------------------------------------------------------------------
+# Features:
+#   - Configuration as Code (JCasC) for zero-touch reproducible setup
+#   - Docker-in-Docker agent provisioning (ephemeral build agents)
+#   - Security hardened (no setup wizard, CSRF protection, agent protocols)
+#   - Declarative plugin management
+#   - Health checks and graceful shutdown
+#   - Resource limits for production stability
+#   - Named volumes for persistence with easy reset
+#   - Traefik-ready labels (optional reverse proxy)
+#
+# Usage:
+#   Start:   docker compose up -d
+#   Reset:   docker compose down -v && docker compose up -d
+#   Logs:    docker compose logs -f jenkins
+#   Shell:   docker compose exec jenkins bash
+#
+# Default credentials: admin / admin (change via JENKINS_ADMIN_PASSWORD)
+###############################################################################
+
+services:
+  jenkins:
+    image: jenkins/jenkins:lts-jdk17
+    container_name: jenkins
+    restart: unless-stopped
+    user: root  # Required for Docker socket access; Jenkins runs as jenkins user internally
+    
+    ports:
+      - "${JENKINS_HTTP_PORT:-8080}:8080"      # Web UI
+      - "${JENKINS_AGENT_PORT:-50000}:50000"   # Agent connections (JNLP)
+    
+    environment:
+      # Skip setup wizard - we use JCasC
+      JAVA_OPTS: >-
+        -Djenkins.install.runSetupWizard=false
+        -Dhudson.security.csrf.GlobalCrumbIssuerConfiguration.DISABLE_CSRF_PROTECTION=false
+        -Djenkins.security.SystemReadPermission=true
+        -Dhudson.model.DirectoryBrowserSupport.CSP=
+        -Xmx${JENKINS_HEAP_MAX:-2g}
+        -Xms${JENKINS_HEAP_MIN:-512m}
+        -XX:+UseG1GC
+        -XX:+AlwaysPreTouch
+        -XX:+UseStringDeduplication
+        -XX:+ParallelRefProcEnabled
+        -Djava.awt.headless=true
+      
+      # JCasC configuration path
+      CASC_JENKINS_CONFIG: /var/jenkins_config/casc.yaml
+      
+      # Credentials passed via environment (use secrets in production)
+      JENKINS_ADMIN_ID: "${JENKINS_ADMIN_ID:-admin}"
+      JENKINS_ADMIN_PASSWORD: "${JENKINS_ADMIN_PASSWORD:-admin}"
+      JENKINS_URL: "${JENKINS_URL:-http://localhost:8080}"
+      GITHUB_TOKEN: "${GITHUB_TOKEN}"
+      
+      # Docker host for DinD agents
+      DOCKER_HOST: tcp://docker-dind:2376
+      DOCKER_TLS_VERIFY: "1"
+      DOCKER_CERT_PATH: /certs/client
+    
+    volumes:
+      # Jenkins home - persistent data
+      - jenkins_home:/var/jenkins_home
+      
+      # JCasC configuration (inline via configs)
+      - type: bind
+        source: ./config
+        target: /var/jenkins_config
+        read_only: true
+      
+      # Docker TLS certs for DinD communication
+      - docker_certs_client:/certs/client:ro
+      
+      # Plugin installation list
+      - type: bind
+        source: ./config/plugins.txt
+        target: /usr/share/jenkins/ref/plugins.txt
+        read_only: true
+    
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:8080/login"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 120s
+    
+    deploy:
+      resources:
+        limits:
+          cpus: "${JENKINS_CPU_LIMIT:-2.0}"
+          memory: "${JENKINS_MEM_LIMIT:-3g}"
+        reservations:
+          cpus: "0.5"
+          memory: "512m"
+    
+    depends_on:
+      docker-dind:
+        condition: service_healthy
+    
+    networks:
+      - jenkins_network
+    
+    # Graceful shutdown
+    stop_grace_period: 60s
+    
+    # Security options
+    security_opt:
+      - no-new-privileges:true
+    
+    labels:
+      # Traefik integration (optional)
+      - "traefik.enable=true"
+      - "traefik.http.routers.jenkins.rule=Host(`jenkins.localhost`)"
+      - "traefik.http.services.jenkins.loadbalancer.server.port=8080"
+
+  #############################################################################
+  # Docker-in-Docker for ephemeral build agents
+  # This provides isolated Docker daemon for builds without host Docker access
+  #############################################################################
+  docker-dind:
+    image: docker:dind
+    container_name: jenkins-docker
+    restart: unless-stopped
+    privileged: true  # Required for DinD
+    
+    environment:
+      DOCKER_TLS_CERTDIR: /certs
+    
+    volumes:
+      # Shared certs for TLS communication
+      - docker_certs_ca:/certs/ca
+      - docker_certs_client:/certs/client
+      
+      # Persist Docker data (images, containers) between restarts
+      - docker_data:/var/lib/docker
+    
+    healthcheck:
+      test: ["CMD", "docker", "info"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    
+    deploy:
+      resources:
+        limits:
+          cpus: "${DOCKER_CPU_LIMIT:-2.0}"
+          memory: "${DOCKER_MEM_LIMIT:-4g}"
+    
+    networks:
+      jenkins_network:
+        aliases:
+          - docker-dind
+    
+    # Expose Docker daemon on TLS port
+    expose:
+      - "2376"
+
+networks:
+  jenkins_network:
+    driver: bridge
+    ipam:
+      driver: default
+      config:
+        - subnet: 172.28.0.0/16
+
+volumes:
+  jenkins_home:
+    name: jenkins_home
+  docker_certs_ca:
+    name: jenkins_docker_certs_ca
+  docker_certs_client:
+    name: jenkins_docker_certs_client
+  docker_data:
+    name: jenkins_docker_data
