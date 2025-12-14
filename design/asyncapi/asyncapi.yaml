@@ -1,0 +1,950 @@
+asyncapi: 3.0.0
+
+info:
+  title: Oxide CI - Rust CI/CD Engine
+  version: 0.1.0
+  description: |
+    API-first CI/CD engine written in Rust. Event-driven architecture
+    for pipeline orchestration, job execution, and real-time streaming.
+  license:
+    name: MIT
+  contact:
+    name: Oxide CI Team
+    url: https://github.com/oxideci/oxide
+
+servers:
+  production:
+    host: api.oxideci.io
+    protocol: wss
+    description: Production WebSocket server
+  
+  development:
+    host: localhost:8080
+    protocol: ws
+    description: Local development server
+
+  nats:
+    host: nats.oxideci.io:4222
+    protocol: nats
+    description: NATS message broker for internal events
+
+defaultContentType: application/json
+
+channels:
+  # ============================================================================
+  # PIPELINE EVENTS
+  # ============================================================================
+  pipeline/created:
+    address: pipeline.created
+    description: Emitted when a new pipeline is created
+    messages:
+      pipelineCreated:
+        $ref: '#/components/messages/PipelineCreated'
+
+  pipeline/updated:
+    address: pipeline.updated
+    description: Emitted when a pipeline configuration is updated
+    messages:
+      pipelineUpdated:
+        $ref: '#/components/messages/PipelineUpdated'
+
+  pipeline/deleted:
+    address: pipeline.deleted
+    description: Emitted when a pipeline is deleted
+    messages:
+      pipelineDeleted:
+        $ref: '#/components/messages/PipelineDeleted'
+
+  # ============================================================================
+  # RUN LIFECYCLE EVENTS
+  # ============================================================================
+  run/queued:
+    address: run.{pipeline_id}.queued
+    description: Emitted when a run is queued for execution
+    parameters:
+      pipeline_id:
+        description: The pipeline identifier
+        schema:
+          type: string
+          format: uuid
+    messages:
+      runQueued:
+        $ref: '#/components/messages/RunQueued'
+
+  run/started:
+    address: run.{pipeline_id}.started
+    description: Emitted when a run begins execution
+    parameters:
+      pipeline_id:
+        schema:
+          type: string
+          format: uuid
+    messages:
+      runStarted:
+        $ref: '#/components/messages/RunStarted'
+
+  run/completed:
+    address: run.{pipeline_id}.completed
+    description: Emitted when a run finishes (success or failure)
+    parameters:
+      pipeline_id:
+        schema:
+          type: string
+          format: uuid
+    messages:
+      runCompleted:
+        $ref: '#/components/messages/RunCompleted'
+
+  run/cancelled:
+    address: run.{pipeline_id}.cancelled
+    description: Emitted when a run is cancelled by user or timeout
+    parameters:
+      pipeline_id:
+        schema:
+          type: string
+          format: uuid
+    messages:
+      runCancelled:
+        $ref: '#/components/messages/RunCancelled'
+
+  # ============================================================================
+  # STAGE EVENTS
+  # ============================================================================
+  stage/started:
+    address: run.{run_id}.stage.{stage_name}.started
+    description: Emitted when a stage begins execution
+    parameters:
+      run_id:
+        schema:
+          type: string
+          format: uuid
+      stage_name:
+        schema:
+          type: string
+    messages:
+      stageStarted:
+        $ref: '#/components/messages/StageStarted'
+
+  stage/completed:
+    address: run.{run_id}.stage.{stage_name}.completed
+    description: Emitted when a stage finishes
+    parameters:
+      run_id:
+        schema:
+          type: string
+          format: uuid
+      stage_name:
+        schema:
+          type: string
+    messages:
+      stageCompleted:
+        $ref: '#/components/messages/StageCompleted'
+
+  # ============================================================================
+  # STEP EVENTS
+  # ============================================================================
+  step/started:
+    address: run.{run_id}.step.{step_id}.started
+    description: Emitted when a step begins execution
+    parameters:
+      run_id:
+        schema:
+          type: string
+          format: uuid
+      step_id:
+        schema:
+          type: string
+    messages:
+      stepStarted:
+        $ref: '#/components/messages/StepStarted'
+
+  step/output:
+    address: run.{run_id}.step.{step_id}.output
+    description: Real-time stdout/stderr streaming from step execution
+    parameters:
+      run_id:
+        schema:
+          type: string
+          format: uuid
+      step_id:
+        schema:
+          type: string
+    messages:
+      stepOutput:
+        $ref: '#/components/messages/StepOutput'
+
+  step/completed:
+    address: run.{run_id}.step.{step_id}.completed
+    description: Emitted when a step finishes
+    parameters:
+      run_id:
+        schema:
+          type: string
+          format: uuid
+      step_id:
+        schema:
+          type: string
+    messages:
+      stepCompleted:
+        $ref: '#/components/messages/StepCompleted'
+
+  # ============================================================================
+  # AGENT EVENTS
+  # ============================================================================
+  agent/registered:
+    address: agent.registered
+    description: Emitted when a new agent joins the pool
+    messages:
+      agentRegistered:
+        $ref: '#/components/messages/AgentRegistered'
+
+  agent/heartbeat:
+    address: agent.{agent_id}.heartbeat
+    description: Periodic health check from agent
+    parameters:
+      agent_id:
+        schema:
+          type: string
+          format: uuid
+    messages:
+      agentHeartbeat:
+        $ref: '#/components/messages/AgentHeartbeat'
+
+  agent/disconnected:
+    address: agent.disconnected
+    description: Emitted when an agent leaves the pool
+    messages:
+      agentDisconnected:
+        $ref: '#/components/messages/AgentDisconnected'
+
+  # ============================================================================
+  # WEBHOOK EVENTS (Inbound)
+  # ============================================================================
+  webhook/github:
+    address: webhook.github
+    description: Incoming GitHub webhook events
+    messages:
+      githubPush:
+        $ref: '#/components/messages/GitHubPush'
+      githubPullRequest:
+        $ref: '#/components/messages/GitHubPullRequest'
+
+  # ============================================================================
+  # ARTIFACT EVENTS
+  # ============================================================================
+  artifact/uploaded:
+    address: artifact.{run_id}.uploaded
+    description: Emitted when an artifact is uploaded
+    parameters:
+      run_id:
+        schema:
+          type: string
+          format: uuid
+    messages:
+      artifactUploaded:
+        $ref: '#/components/messages/ArtifactUploaded'
+
+  # ============================================================================
+  # PLUGIN EVENTS
+  # ============================================================================
+  plugin/loaded:
+    address: plugin.loaded
+    description: Emitted when a WASM plugin is loaded
+    messages:
+      pluginLoaded:
+        $ref: '#/components/messages/PluginLoaded'
+
+  plugin/unloaded:
+    address: plugin.unloaded
+    description: Emitted when a plugin is unloaded
+    messages:
+      pluginUnloaded:
+        $ref: '#/components/messages/PluginUnloaded'
+
+operations:
+  # ============================================================================
+  # SUBSCRIBE OPERATIONS (Client receives)
+  # ============================================================================
+  onRunQueued:
+    action: receive
+    channel:
+      $ref: '#/channels/run~1queued'
+    summary: Receive notification when a run is queued
+
+  onRunStarted:
+    action: receive
+    channel:
+      $ref: '#/channels/run~1started'
+    summary: Receive notification when a run starts
+
+  onRunCompleted:
+    action: receive
+    channel:
+      $ref: '#/channels/run~1completed'
+    summary: Receive notification when a run completes
+
+  onStepOutput:
+    action: receive
+    channel:
+      $ref: '#/channels/step~1output'
+    summary: Stream real-time log output from steps
+
+  onAgentHeartbeat:
+    action: receive
+    channel:
+      $ref: '#/channels/agent~1heartbeat'
+    summary: Monitor agent health
+
+  # ============================================================================
+  # PUBLISH OPERATIONS (Client sends)
+  # ============================================================================
+  triggerRun:
+    action: send
+    channel:
+      $ref: '#/channels/run~1queued'
+    summary: Trigger a new pipeline run
+
+  cancelRun:
+    action: send
+    channel:
+      $ref: '#/channels/run~1cancelled'
+    summary: Cancel a running pipeline
+
+  registerAgent:
+    action: send
+    channel:
+      $ref: '#/channels/agent~1registered'
+    summary: Register a new agent
+
+  sendHeartbeat:
+    action: send
+    channel:
+      $ref: '#/channels/agent~1heartbeat'
+    summary: Send agent heartbeat
+
+components:
+  messages:
+    # ==========================================================================
+    # PIPELINE MESSAGES
+    # ==========================================================================
+    PipelineCreated:
+      name: PipelineCreated
+      title: Pipeline Created Event
+      contentType: application/json
+      payload:
+        $ref: '#/components/schemas/PipelineEvent'
+
+    PipelineUpdated:
+      name: PipelineUpdated
+      title: Pipeline Updated Event
+      contentType: application/json
+      payload:
+        $ref: '#/components/schemas/PipelineEvent'
+
+    PipelineDeleted:
+      name: PipelineDeleted
+      title: Pipeline Deleted Event
+      contentType: application/json
+      payload:
+        type: object
+        properties:
+          pipeline_id:
+            type: string
+            format: uuid
+          deleted_at:
+            type: string
+            format: date-time
+
+    # ==========================================================================
+    # RUN MESSAGES
+    # ==========================================================================
+    RunQueued:
+      name: RunQueued
+      title: Run Queued Event
+      contentType: application/json
+      payload:
+        $ref: '#/components/schemas/RunEvent'
+
+    RunStarted:
+      name: RunStarted
+      title: Run Started Event
+      contentType: application/json
+      payload:
+        allOf:
+          - $ref: '#/components/schemas/RunEvent'
+          - type: object
+            properties:
+              agent_id:
+                type: string
+                format: uuid
+              started_at:
+                type: string
+                format: date-time
+
+    RunCompleted:
+      name: RunCompleted
+      title: Run Completed Event
+      contentType: application/json
+      payload:
+        allOf:
+          - $ref: '#/components/schemas/RunEvent'
+          - type: object
+            properties:
+              status:
+                $ref: '#/components/schemas/RunStatus'
+              duration_ms:
+                type: integer
+              completed_at:
+                type: string
+                format: date-time
+
+    RunCancelled:
+      name: RunCancelled
+      title: Run Cancelled Event
+      contentType: application/json
+      payload:
+        allOf:
+          - $ref: '#/components/schemas/RunEvent'
+          - type: object
+            properties:
+              cancelled_by:
+                type: string
+              reason:
+                type: string
+              cancelled_at:
+                type: string
+                format: date-time
+
+    # ==========================================================================
+    # STAGE MESSAGES
+    # ==========================================================================
+    StageStarted:
+      name: StageStarted
+      title: Stage Started Event
+      contentType: application/json
+      payload:
+        $ref: '#/components/schemas/StageEvent'
+
+    StageCompleted:
+      name: StageCompleted
+      title: Stage Completed Event
+      contentType: application/json
+      payload:
+        allOf:
+          - $ref: '#/components/schemas/StageEvent'
+          - type: object
+            properties:
+              status:
+                $ref: '#/components/schemas/StepStatus'
+              duration_ms:
+                type: integer
+
+    # ==========================================================================
+    # STEP MESSAGES
+    # ==========================================================================
+    StepStarted:
+      name: StepStarted
+      title: Step Started Event
+      contentType: application/json
+      payload:
+        $ref: '#/components/schemas/StepEvent'
+
+    StepOutput:
+      name: StepOutput
+      title: Step Output Stream
+      description: Real-time log line from step execution
+      contentType: application/json
+      payload:
+        type: object
+        required: [run_id, step_id, stream, line, timestamp]
+        properties:
+          run_id:
+            type: string
+            format: uuid
+          step_id:
+            type: string
+          stream:
+            type: string
+            enum: [stdout, stderr]
+          line:
+            type: string
+          line_number:
+            type: integer
+          timestamp:
+            type: string
+            format: date-time
+
+    StepCompleted:
+      name: StepCompleted
+      title: Step Completed Event
+      contentType: application/json
+      payload:
+        allOf:
+          - $ref: '#/components/schemas/StepEvent'
+          - type: object
+            properties:
+              status:
+                $ref: '#/components/schemas/StepStatus'
+              exit_code:
+                type: integer
+              duration_ms:
+                type: integer
+
+    # ==========================================================================
+    # AGENT MESSAGES
+    # ==========================================================================
+    AgentRegistered:
+      name: AgentRegistered
+      title: Agent Registered Event
+      contentType: application/json
+      payload:
+        $ref: '#/components/schemas/Agent'
+
+    AgentHeartbeat:
+      name: AgentHeartbeat
+      title: Agent Heartbeat
+      contentType: application/json
+      payload:
+        type: object
+        required: [agent_id, timestamp, status]
+        properties:
+          agent_id:
+            type: string
+            format: uuid
+          timestamp:
+            type: string
+            format: date-time
+          status:
+            type: string
+            enum: [idle, busy, draining]
+          current_run_id:
+            type: string
+            format: uuid
+          system_metrics:
+            $ref: '#/components/schemas/SystemMetrics'
+
+    AgentDisconnected:
+      name: AgentDisconnected
+      title: Agent Disconnected Event
+      contentType: application/json
+      payload:
+        type: object
+        properties:
+          agent_id:
+            type: string
+            format: uuid
+          reason:
+            type: string
+            enum: [graceful, timeout, error]
+          disconnected_at:
+            type: string
+            format: date-time
+
+    # ==========================================================================
+    # WEBHOOK MESSAGES
+    # ==========================================================================
+    GitHubPush:
+      name: GitHubPush
+      title: GitHub Push Event
+      contentType: application/json
+      payload:
+        type: object
+        properties:
+          ref:
+            type: string
+          before:
+            type: string
+          after:
+            type: string
+          repository:
+            $ref: '#/components/schemas/GitHubRepository'
+          commits:
+            type: array
+            items:
+              $ref: '#/components/schemas/GitHubCommit'
+
+    GitHubPullRequest:
+      name: GitHubPullRequest
+      title: GitHub Pull Request Event
+      contentType: application/json
+      payload:
+        type: object
+        properties:
+          action:
+            type: string
+            enum: [opened, closed, synchronize, reopened]
+          number:
+            type: integer
+          pull_request:
+            type: object
+
+    # ==========================================================================
+    # ARTIFACT MESSAGES
+    # ==========================================================================
+    ArtifactUploaded:
+      name: ArtifactUploaded
+      title: Artifact Uploaded Event
+      contentType: application/json
+      payload:
+        type: object
+        required: [run_id, artifact_id, name, size_bytes]
+        properties:
+          run_id:
+            type: string
+            format: uuid
+          artifact_id:
+            type: string
+            format: uuid
+          name:
+            type: string
+          path:
+            type: string
+          size_bytes:
+            type: integer
+          content_type:
+            type: string
+          checksum_sha256:
+            type: string
+          uploaded_at:
+            type: string
+            format: date-time
+
+    # ==========================================================================
+    # PLUGIN MESSAGES
+    # ==========================================================================
+    PluginLoaded:
+      name: PluginLoaded
+      title: Plugin Loaded Event
+      contentType: application/json
+      payload:
+        $ref: '#/components/schemas/Plugin'
+
+    PluginUnloaded:
+      name: PluginUnloaded
+      title: Plugin Unloaded Event
+      contentType: application/json
+      payload:
+        type: object
+        properties:
+          plugin_id:
+            type: string
+          reason:
+            type: string
+
+  schemas:
+    # ==========================================================================
+    # CORE SCHEMAS
+    # ==========================================================================
+    Pipeline:
+      type: object
+      required: [id, name, stages]
+      properties:
+        id:
+          type: string
+          format: uuid
+        name:
+          type: string
+        description:
+          type: string
+        triggers:
+          type: array
+          items:
+            $ref: '#/components/schemas/Trigger'
+        env:
+          type: object
+          additionalProperties:
+            type: string
+        stages:
+          type: array
+          items:
+            $ref: '#/components/schemas/Stage'
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+
+    PipelineEvent:
+      type: object
+      required: [pipeline_id, name, timestamp]
+      properties:
+        pipeline_id:
+          type: string
+          format: uuid
+        name:
+          type: string
+        version:
+          type: integer
+        timestamp:
+          type: string
+          format: date-time
+
+    Stage:
+      type: object
+      required: [name, steps]
+      properties:
+        name:
+          type: string
+        needs:
+          type: array
+          items:
+            type: string
+        parallel:
+          type: boolean
+          default: false
+        matrix:
+          type: object
+          additionalProperties:
+            type: array
+            items:
+              type: string
+        steps:
+          type: array
+          items:
+            $ref: '#/components/schemas/Step'
+        condition:
+          type: string
+
+    Step:
+      type: object
+      required: [plugin]
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+        plugin:
+          type: string
+        with:
+          type: object
+          additionalProperties: true
+        env:
+          type: object
+          additionalProperties:
+            type: string
+        timeout_seconds:
+          type: integer
+          default: 3600
+        continue_on_error:
+          type: boolean
+          default: false
+
+    Trigger:
+      type: object
+      properties:
+        push:
+          type: object
+          properties:
+            branches:
+              type: array
+              items:
+                type: string
+            paths:
+              type: array
+              items:
+                type: string
+        pull_request:
+          type: object
+          properties:
+            branches:
+              type: array
+              items:
+                type: string
+        cron:
+          type: string
+        webhook:
+          type: object
+          properties:
+            secret:
+              type: string
+
+    RunEvent:
+      type: object
+      required: [run_id, pipeline_id, run_number, timestamp]
+      properties:
+        run_id:
+          type: string
+          format: uuid
+        pipeline_id:
+          type: string
+          format: uuid
+        pipeline_name:
+          type: string
+        run_number:
+          type: integer
+        trigger:
+          type: string
+          enum: [push, pull_request, cron, manual, api]
+        git_ref:
+          type: string
+        git_sha:
+          type: string
+        timestamp:
+          type: string
+          format: date-time
+
+    StageEvent:
+      type: object
+      required: [run_id, stage_name, timestamp]
+      properties:
+        run_id:
+          type: string
+          format: uuid
+        stage_name:
+          type: string
+        stage_index:
+          type: integer
+        timestamp:
+          type: string
+          format: date-time
+
+    StepEvent:
+      type: object
+      required: [run_id, stage_name, step_id, timestamp]
+      properties:
+        run_id:
+          type: string
+          format: uuid
+        stage_name:
+          type: string
+        step_id:
+          type: string
+        step_name:
+          type: string
+        plugin:
+          type: string
+        timestamp:
+          type: string
+          format: date-time
+
+    RunStatus:
+      type: string
+      enum:
+        - success
+        - failure
+        - cancelled
+        - timeout
+        - skipped
+
+    StepStatus:
+      type: string
+      enum:
+        - success
+        - failure
+        - skipped
+        - cancelled
+
+    Agent:
+      type: object
+      required: [id, name, labels]
+      properties:
+        id:
+          type: string
+          format: uuid
+        name:
+          type: string
+        labels:
+          type: array
+          items:
+            type: string
+        version:
+          type: string
+        os:
+          type: string
+        arch:
+          type: string
+        capabilities:
+          type: array
+          items:
+            type: string
+            enum: [docker, podman, firecracker, nix]
+        max_concurrent_jobs:
+          type: integer
+          default: 1
+        registered_at:
+          type: string
+          format: date-time
+
+    SystemMetrics:
+      type: object
+      properties:
+        cpu_percent:
+          type: number
+        memory_used_bytes:
+          type: integer
+        memory_total_bytes:
+          type: integer
+        disk_used_bytes:
+          type: integer
+        disk_total_bytes:
+          type: integer
+        load_average:
+          type: array
+          items:
+            type: number
+
+    Plugin:
+      type: object
+      required: [id, name, version]
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+        version:
+          type: string
+        description:
+          type: string
+        author:
+          type: string
+        capabilities:
+          type: array
+          items:
+            type: string
+            enum:
+              - read_env
+              - write_artifact
+              - read_secret
+              - http_client
+              - exec_command
+              - docker
+        wasm_size_bytes:
+          type: integer
+        checksum_sha256:
+          type: string
+        loaded_at:
+          type: string
+          format: date-time
+
+    GitHubRepository:
+      type: object
+      properties:
+        id:
+          type: integer
+        name:
+          type: string
+        full_name:
+          type: string
+        private:
+          type: boolean
+        clone_url:
+          type: string
+
+    GitHubCommit:
+      type: object
+      properties:
+        id:
+          type: string
+        message:
+          type: string
+        author:
+          type: object
+          properties:
+            name:
+              type: string
+            email:
+              type: string
+        timestamp:
+          type: string
+          format: date-time
